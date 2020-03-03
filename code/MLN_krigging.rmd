@@ -1,0 +1,263 @@
+---
+title: "MLN effect prediction using IDW and krigging"
+author: "Sebastian Palmas"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: pdf_document
+---
+
+#Introduction
+
+#Analysis
+
+## Packages
+```{r, message=FALSE}
+library(tidyverse)
+```
+
+
+
+## Reading data from SPSS .sav files to R
+We have the tavles in SPSS and we need to import them into R using the `foreign` package. This is not a perfect import and we will need to clean the data after.
+```{r, warning=FALSE, message=FALSE}
+library(foreign)
+MLN2015 <-  read.spss("../data/MAIZE LETHAL NECROSIS_2015.sav", to.data.frame=TRUE) %>% as_tibble()
+survey2018 <-  read.spss("../data/STMA comm survey 2018 v9_MLN_hdg.sav", to.data.frame=TRUE) %>% as_tibble()
+```
+
+This is the data structure 
+```{r}
+#str(MLN_2015)
+str(survey2018)
+```
+
+### Cleaning the table
+`read.spss` reads some number columns as factors. Here I change the columns to numbers 
+
+```{r}
+survey2018 <- survey2018 %>% 
+  mutate(fe_total = as.numeric(as.character(fe_total)),   #numeric incorrectly read as factor
+         ma_total = as.numeric(as.character(ma_total)),   #numeric incorrectly read as factor
+         total_participants = as.numeric(as.character(total_participants)),   #numeric incorrectly read as factor
+         hhs_comm = as.numeric(as.character(hhs_comm)),   #numeric incorrectly read as factor
+         mln_know = as.numeric(as.character(mln_know)),   #numeric incorrectly read as factor
+         mln_1styear = as.numeric(as.character(mln_1styear)),    #numeric incorrectly read as factor
+         mln_march2018 = !is.na(mln_march2018),   #factor probably better using TRUE/FALSE
+         mln_affctd_march2018 = as.numeric(as.character(mln_affctd_march2018)),    #numeric incorrectly read as factor
+         mln_ydrd_march2018 = as.numeric(as.character(mln_ydrd_march2018)),    #numeric incorrectly read as factor
+         mln_oct2017 = !is.na(mln_oct2017),   #factor probably better using TRUE/FALSE
+         mln_affctd_oct2017 = as.numeric(as.character(mln_affctd_oct2017)),    #numeric incorrectly read as factor
+         mln_ydrd_oct2017 = as.numeric(as.character(mln_ydrd_oct2017)),    #numeric incorrectly read as factor
+         mln_march2017 = !is.na(mln_march2017),   #factor probably better using TRUE/FALSE
+         mln_affctd_march2017 = as.numeric(as.character(mln_affctd_march2017)),    #numeric incorrectly read as factor
+         mln_ydrd_march2017 = as.numeric(as.character(mln_ydrd_march2017)),    #numeric incorrectly read as factor
+         mln_pkyear = as.numeric(as.character(mln_pkyear)),    #numeric incorrectly read as factor
+         mln_no_methods = as.numeric(as.character(mln_no_methods)),    #numeric incorrectly read as factor
+         mln_prop_meth_1 = as.numeric(as.character(mln_prop_meth_1)),    #numeric incorrectly read as factor
+         mln_prop_meth_2 = as.numeric(as.character(mln_prop_meth_2)),    #numeric incorrectly read as factor
+         mln_prop_meth_3 = as.numeric(as.character(mln_prop_meth_3)),    #numeric incorrectly read as factor
+         mln_prop_meth_4 = as.numeric(as.character(mln_prop_meth_4)),    #numeric incorrectly read as factor
+         mln_prop_meth_5 = as.numeric(as.character(mln_prop_meth_5)),    #numeric incorrectly read as factor
+         )
+
+#some cells have " " instead of NA. We replace those values to NA
+survey2018[survey2018 == " "] <- NA
+```
+
+## Explore
+
+Summary statistics by country
+```{r, echo=FALSE}
+survey2018 %>% 
+  group_by(county) %>% 
+  summarize(affctd_march2017 = mean(mln_affctd_march2017),
+            affctd_oct2017 = mean(mln_affctd_oct2017),
+            affctd_march2018 = mean(mln_affctd_march2018))
+```
+Summary statistics by AEZ
+```{r, echo=FALSE}
+survey2018 %>% 
+  group_by(AEZ) %>% 
+  summarize(affctd_march2017 = mean(mln_affctd_march2017),
+            affctd_oct2017 = mean(mln_affctd_oct2017),
+            affctd_march2018 = mean(mln_affctd_march2018))
+```
+Number of countries by the year of first observation
+```{r, echo=FALSE}
+p <- ggplot(survey2018, aes(x=mln_pkyear)) + 
+  geom_histogram(breaks=seq(2005.5, 2018.5,1)) +
+  scale_x_continuous(breaks=seq(2005,2018,1)) +
+  scale_y_continuous(breaks=seq(2005,2018,1)) +
+  labs(x ="Year of first MLN observation", y = "Number of counties") +
+  theme( panel.grid.minor = element_blank())
+p
+```
+Most common methods against MLN
+```{r, echo=FALSE}
+rbind(as.character(survey2018$mln_contr_meth_1),
+      as.character(survey2018$mln_contr_meth_2),
+      as.character(survey2018$mln_contr_meth_3),
+      as.character(survey2018$mln_contr_meth_4),
+      as.character(survey2018$mln_contr_meth_5)) %>% table() %>% sort(decreasing = TRUE)
+
+```
+
+
+Proportion of farmers using methods
+```{r, echo=FALSE}
+survey2018$mln_affctd_march2018   #% of farmers affected\
+survey2018$mln_ydrd_march2018   #% of yield reduction (of the farmers that were affected)
+survey2018$mln_YLoss_march2018   #Total loss %farmaffected * %yield reduction (%of yield loss from the total yield of the )
+```
+
+
+Distribution of affected farmers by county
+```{r}
+p <- ggplot(survey2018, aes(x=county, y=mln_affctd_march2018)) + geom_boxplot()
+p
+```
+
+
+# Interpolation
+
+We will use functions from many packages.
+
+```{r, message=FALSE}
+library(fields)   #
+library(gstat)   #for IDW and krigging model
+library(raster)
+```
+
+
+## SPAM layer
+
+We will use the spam yield layer as the base for the prediction.
+SPAM has a layer of prediction of the total maize production. It has a resolution of X and we will predict the MLN loss using that same resolution.
+
+We will crop the SPAM to Kenya border from GADM:
+```{r}
+GADM1_KEN <- shapefile("F:/Work/GADM/gadm36_levels_shp/gadm36_KEN_shp/gadm36_KEN_1.shp")
+
+SPAM <- raster("F:/Work/SPAM/spam2010v1r1/spam2010v1r1_global_prod.geotiff/spam2010V1r1_global_P_MAIZ_A.tif")
+
+#crop clips to the wanted extent
+SPAM_KEN <- crop(SPAM, GADM1_KEN) 
+
+#Mask changes to NA values outside the shapefiles of the SpatVector
+SPAM_KEN <- mask(SPAM_KEN, GADM1_KEN,
+                 filename = "F:/Work/SPAM/spam2010v1r1/spam2010v1r1_global_prod.geotiff/spam2010V1r1_global_P_MAIZ_A_KEN.tif",
+                 overwrite=TRUE) 
+
+```
+
+```{r, echo=FALSE}
+plot(SPAM_KEN)
+lines(GADM1_KEN)
+```
+
+
+## STMA survey
+
+We then need to create the vector object that will be used.
+
+```{r}
+#changing the name of columns
+survey2018$x <- survey2018$gpslongitude
+survey2018$y <- survey2018$gpslatitude
+
+survey2018_vect <- SpatialPointsDataFrame(cbind(survey2018$gpslongitude,
+                                                survey2018$gpslatitude),
+                                          data=survey2018,
+                                          proj4string = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"))
+
+#Export layer to a shapefile
+rgdal::writeOGR(obj=survey2018_vect, dsn="../data/STMA comm survey 2018 v9_MLN_hdg.shp",
+         layer="survey2018", driver="ESRI Shapefile") # this is in geographical projection
+```
+
+```{r, echo=false}
+plot(survey2018_vect, pch = 16, col="green", xlim = c(34,42))
+lines(GADM1_KEN)
+```
+
+### Seasons
+
+There are 3 seasons where MLN was measured March2017, October 2017 and March 2018. We will have results for each of these seasons. In this code below we specify the name of the columns that we will use. This will make it easier to repeat the analysis for each season
+
+```{r}
+#SEASON COLUMN NAMES: % of farmers affected seasons
+affctd_seasons <- c("affctd_march2017", "affctd_oct2017", "affctd_march2018")
+
+#SEASON COLUMN NAMES: % of yield reduction of the farmers affected
+mln_ydrd_seasons <- c("mln_ydrd_march2017", "mln_ydrd_oct2017", "mln_ydrd_march2018")
+
+#SEASON COLUMN NAMES: Total loss
+#If percentage of farmers is almost equal to percentage of land, this is a measure of percentage of yield loss in that community
+#%farmaffected * %yield reduction (%of yield loss from the total yield of the )
+mln_YLoss_seasons  <- c("mln_YLoss_march2017", "mln_YLoss_oct2017", "mln_YLoss_march2018")
+
+```
+
+## IDW
+
+One option is to use IDW using the `gstat` package.
+
+```{r}
+library(gstat)
+
+for (mln_YLoss_season in mln_YLoss_seasons){
+  #building model
+  mg <- gstat(id = "mln_YLoss_march2017", formula = get(mln_YLoss_season)~1, locations = ~x+y, data=survey2018_vect@data, 
+              nmax=7, set=list(idp = .5))
+  
+  #interpolating in the SPAM_KEN extent
+  z <- interpolate(SPAM_KEN, mg)
+  
+  #mask the values using the SPAM_KEN
+  z <- mask(z, SPAM_KEN)
+  
+  #exporting the prediction
+  writeRaster(z, filename = paste0("../output/tif/", mln_YLoss_season,"_IDW.tif"),
+              overwrite=TRUE)
+  
+  plot(z, main = paste0("IDW: ", mln_YLoss_season))
+}
+  
+```
+
+
+## Ordinary krigging
+
+```{r}
+survey2018_krig <- survey2018
+coordinates(survey2018_krig) <- ~x+y
+crs(survey2018_krig) <- crs(SPAM_KEN)
+
+for (mln_YLoss_season in mln_YLoss_seasons){
+  #building model
+  v <- variogram(get(mln_YLoss_season)~1, data = survey2018_krig)
+  
+  m <- fit.variogram(object = v,
+                     model = vgm(psill = 1,
+                                 model = "Sph",
+                                 range = 100,
+                                 nugget = 1))
+  
+  gOK <- gstat(NULL, "mln_YLoss_season",
+               get(mln_YLoss_season)~1,
+               survey2018_krig,
+               model=m)
+  
+  #interpolating in the SPAM_KEN extent
+  z <- interpolate(SPAM_KEN, gOK)
+  
+  #mask the values using the SPAM_KEN
+  z <- mask(z, SPAM_KEN)
+  
+  #exporting the prediction
+  writeRaster(z, filename = paste0("../output/tif/", mln_YLoss_season,"_Krigging.tif"),
+              overwrite=TRUE)
+  
+  plot(z, main = paste0("Krigging: ", mln_YLoss_season))
+}
+
+```

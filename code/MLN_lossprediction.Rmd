@@ -1,0 +1,138 @@
+---
+title: "MLN maize loss prediction"
+author: "Sebastian Palmas"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: word_document
+---
+
+#Introduction
+
+#Analysis
+
+## Packages
+```{r, message=FALSE}
+library(terra)
+library(tidyverse)
+```
+
+
+## SPAM and agroecological zones
+
+The basis of the analysis will be the SPAM maize production. Version 1.1.
+
+SPAM production is measured in metric tons. This dataset has a 10 x 10 km resolution.
+
+```{r}
+SPAM2010_prod <- rast("F:/Work/SPAM/spam2010v1r1/spam2010v1r1_global_prod.geotiff/spam2010V1r1_global_P_MAIZ_A_KEN.tif")
+```
+
+### Agroecological zones
+
+This is the agrocological zones defined by X. We will use them to summarize the results.
+
+```{r}
+AEZ <- vect("F:/Work/Kenya/Agroecological zones/aez2b/aez.shp") %>% 
+  project(crs = crs(SPAM2010_prod), col = NAME_AEZ)
+```
+
+### Physical area decicated to production
+
+We need the area dedicated to maize in each agroecological zone. WE use the phys_area from SPAM to calculate this. It is measured in Hectares
+
+These numbers are just a little different than those reported in the FAW paper, probably because of the differences in the SPAM 2010 version.
+
+```{r}
+SPAM2010_phys_area <- rast("F:/Work/SPAM/spam2010v1r1/spam2010v1r1_global_phys_area.geotiff/spam2010V1r1_global_A_MAIZ_A.tif")  #In Hectares
+
+SPAM2010_phys_area_AEZ <- terra::extract(x = SPAM2010_phys_area, y = AEZ, fun = sum, na.rm=TRUE)  #adding all losses for that AEZ IN HECTARES
+colnames(SPAM2010_phys_area_AEZ) <- "PHYS_AREA_MAIZ"
+
+results <- cbind.data.frame(NAME_AEZ = AEZ$NAME_AEZ, SPAM2010_phys_area_AEZ, LR_perc = AEZ$LR_perc)
+results
+```
+
+
+
+### Long rains, short rains
+
+`spam2010V1r1_global_P_MAIZ_A_KEN.tif` is a measure of annual prodution of maize. Therefore we need to divide the annual production between the two seasons: long rains (MAR-MAY with harvest occurring October-November) and short rains(OCT-DEC with harvest ocurring February-March).
+We divided them using a calculated Long rain percentage of the production. This proportion was calculated...
+
+In order to use it in calculations, we create a raster using the Long rain proportions by AEZ using the template of SPAM. When we multiply this by the amount of production (SPAM), we get the total production for that season (or by 1-LR_perc in the case of short rains).
+
+```{r}
+AEZ_LRperc <- terra::rasterize(x=AEZ, y=SPAM2010_prod, field=AEZ$LR_perc,
+                               filename="F:/Work/Kenya/Agroecological zones/aez2b/aez_LRperc.tif", overwrite=TRUE)
+```
+
+
+
+## Total yield loss = Multiplying Yield % loss prediction * seasonal SPAM production
+
+We have data for 3 seasons of measurements: March 2017 (LR), October 2017 (SR) and March 2018 (LR) based on their planting date.
+
+Calculating total yield loss for each season in the data. We correct by the Long-rain percentage of the production
+
+```{r, warning=FALSE, message=FALSE}
+mln_YLoss_march2017_rast <-  rast("../output/tif/mln_YLoss_march2017_Krigging.tif") #percentage of yield reduction in the pixel/
+mln_total_Loss_march2017 <-  SPAM2010_prod * AEZ_LRperc * (mln_YLoss_march2017_rast/100) #/100 to convert from percentage to proportion
+writeRaster(mln_total_Loss_march2017, filename = "../output/tif/mln_total_Loss_march2017.tif", overwrite=TRUE)  #production loss in the season (tonnes/pixel)
+
+mln_YLoss_oct2017_rast <-  rast("../output/tif/mln_YLoss_oct2017_Krigging.tif") #percentage of yield reduction in the pixel/
+mln_total_Loss_oct2017 <-  SPAM2010_prod * (1 - AEZ_LRperc) * (mln_YLoss_oct2017_rast/100) #/100 to convert from percentage to proportion #oct in a short rain season 
+writeRaster(mln_total_Loss_oct2017, filename = "../output/tif/mln_total_Loss_oct2017.tif", overwrite=TRUE)  #production loss in the season (tonnes/pixel)
+
+mln_YLoss_march2018_rast <-  rast("../output/tif/mln_YLoss_march2018_Krigging.tif") #percentage of yield reduction in the pixel/
+mln_total_Loss_march2018 <-  SPAM2010_prod * AEZ_LRperc * (mln_YLoss_march2018_rast/100) #/100 to convert from percentage to proportion
+writeRaster(mln_total_Loss_march2018, filename = "../output/tif/mln_total_Loss_march2018.tif", overwrite=TRUE)  #production loss in the season (tonnes/pixel)
+
+```
+
+
+## Summary of results by AEZ
+```{r}
+
+#season names to use in loop
+seasons  <- c("march2017", "oct2017", "march2018")
+
+for (season in seasons){
+  #season <- seasons[1]
+  mln_perc_Loss_season <-  rast(paste0("../output/tif/mln_YLoss_", season, "_Krigging.tif")) #percentage of yield reduction in the pixel/
+  mln_total_Loss_season <- rast(paste0("../output/tif/mln_total_Loss_", season, ".tif"))  #reading total loss raster
+  
+  #adding to the table
+  mln_perc_Loss_season_AEZ <- terra::extract(x = mln_perc_Loss_season, y = AEZ, fun = mean, na.rm=TRUE)  #Mean loss
+  colnames(mln_perc_Loss_season_AEZ) <- paste0("mln_mean_Loss_", season)  #changing name for the final results table
+  
+  mln_total_Loss_season_AEZ <- terra::extract(x = mln_total_Loss_season, y = AEZ, fun = sum, na.rm=TRUE)  #Production loss (tonnes)
+  colnames(mln_total_Loss_season_AEZ) <- paste0("mln_total_Loss_", season)  #changing name for the final results table
+  
+  results <- cbind.data.frame(results, mln_perc_Loss_season_AEZ, mln_total_Loss_season_AEZ)
+  
+}
+
+#exporting results
+write.table(results, file = "../output/tables/MLN_loss_byAEZ.csv",sep=",", row.names = FALSE)
+
+results
+```
+
+## 2018 surfaces
+
+For representation purposes, we need a layer of results for the complete production in 2018 by adding the October 2017, March 2017 seasons.
+
+We need two surfaces
+* Percentage of production loss in 2018 = (mln_total_Loss_oct2017 + mln_total_Loss_march2018)/SPAM2010_prod
+* Production loss (kg/ha)
+
+```{r}
+mln_perc_Loss_2018 <- (mln_total_Loss_oct2017 + mln_total_Loss_march2018)/SPAM2010_prod
+writeRaster(mln_perc_Loss_2018, filename = "../output/tif/mln_perc_Loss_2018.tif", overwrite=TRUE)
+
+#The production loss has the units of kg/ha. We need to convert the units
+#*1000 to convert from tonnes to kg
+#/10000 to convert from 100km2 to ha
+mln_total_Loss_2018 <- (mln_total_Loss_oct2017 + mln_total_Loss_march2018)*1000/10000
+writeRaster(mln_total_Loss_2018, filename = "../output/tif/mln_total_Loss_2018.tif", overwrite=TRUE)
+
+```
