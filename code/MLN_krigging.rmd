@@ -4,29 +4,48 @@ author: "Sebastian Palmas"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output: pdf_document
 ---
-
 #Introduction
-
-#Analysis
 
 ## Packages
 ```{r, message=FALSE}
+library(fields)   #
+library(foreign)  #to read SPSS files
+library(gstat)   #for IDW and krigging model
+library(raster)
 library(tidyverse)
 ```
 
 
+#Analysis
 
-## Reading data from SPSS .sav files to R
-We have the tavles in SPSS and we need to import them into R using the `foreign` package. This is not a perfect import and we will need to clean the data after.
+There are two databases, one for 2013 with one season data (`MAIZE LETHAL NECROSIS_2015.sav`) and one with three season data that was measured in 2018 (`STMA comm survey 2018 v9_MLN_hdg.sav`).
+
+
+
+
+#MLN2015 data
+This survey asked about the annual losses
 ```{r, warning=FALSE, message=FALSE}
-library(foreign)
-MLN2015 <-  read.spss("../data/MAIZE LETHAL NECROSIS_2015.sav", to.data.frame=TRUE) %>% as_tibble()
-survey2018 <-  read.spss("../data/STMA comm survey 2018 v9_MLN_hdg.sav", to.data.frame=TRUE) %>% as_tibble()
+MLN2015 <-  read.spss("../data/MAIZE LETHAL NECROSIS_2015.sav", to.data.frame=TRUE) %>% 
+  as_tibble() %>% 
+  dplyr::select(COMM_ID, Latitude, Longitude, YEAR_MLN, PROP_MLN, YIELD_MLN) %>%   #reducing table size
+  mutate(mln_YLoss_2013 = PROP_MLN/100 * YIELD_MLN) %>%   #calculating yield loss in that community. Same calculation and variable name as reported in 2018 data
+  filter(!is.na(mln_YLoss_2013))
 ```
 
-This is the data structure 
+Importing from sav files is not perfect and we need to clean the data.
+
 ```{r}
-#str(MLN_2015)
+head(MLN2015)
+```
+
+
+#Survey 2018 data
+
+Measured for three seasons in 2017 and 2018
+
+```{r, warning=FALSE, message=FALSE}
+survey2018 <-  read.spss("../data/STMA comm survey 2018 v9_MLN_hdg.sav", to.data.frame=TRUE) %>% as_tibble()
 str(survey2018)
 ```
 
@@ -63,7 +82,7 @@ survey2018 <- survey2018 %>%
 survey2018[survey2018 == " "] <- NA
 ```
 
-## Explore
+# Explore
 
 Summary statistics by country
 ```{r, echo=FALSE}
@@ -102,14 +121,6 @@ rbind(as.character(survey2018$mln_contr_meth_1),
 ```
 
 
-Proportion of farmers using methods
-```{r, echo=FALSE}
-survey2018$mln_affctd_march2018   #% of farmers affected\
-survey2018$mln_ydrd_march2018   #% of yield reduction (of the farmers that were affected)
-survey2018$mln_YLoss_march2018   #Total loss %farmaffected * %yield reduction (%of yield loss from the total yield of the )
-```
-
-
 Distribution of affected farmers by county
 ```{r}
 p <- ggplot(survey2018, aes(x=county, y=mln_affctd_march2018)) + geom_boxplot()
@@ -119,21 +130,11 @@ p
 
 # Interpolation
 
-We will use functions from many packages.
-
-```{r, message=FALSE}
-library(fields)   #
-library(gstat)   #for IDW and krigging model
-library(raster)
-```
-
-
 ## SPAM layer
 
-We will use the spam yield layer as the base for the prediction.
-SPAM has a layer of prediction of the total maize production. It has a resolution of X and we will predict the MLN loss using that same resolution.
+We will use the spam production layer as the base for the prediction. It has a resolution of 10 x 10 km and we will predict the MLN loss using that same resolution.
 
-We will crop the SPAM to Kenya border from GADM:
+First, we crop the SPAM to Kenya border from GADM so only values inside Kenya are calculated.
 ```{r}
 GADM1_KEN <- shapefile("F:/Work/GADM/gadm36_levels_shp/gadm36_KEN_shp/gadm36_KEN_1.shp")
 
@@ -153,111 +154,103 @@ SPAM_KEN <- mask(SPAM_KEN, GADM1_KEN,
 plot(SPAM_KEN)
 lines(GADM1_KEN)
 ```
-
-
-## STMA survey
+## Converting MLN2015 and survey 2018 data to SpatialPointsDataFrame
 
 We then need to create the vector object that will be used.
 
 ```{r}
+#changing the name of columns and creating object
+MLN2015$x <- MLN2015$Longitude
+MLN2015$y <- MLN2015$Latitude
+MLN2015_vect <- SpatialPointsDataFrame(cbind(MLN2015$x, MLN2015$y),
+                                       data=MLN2015,
+                                       proj4string = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"))
+#Export layer to a shapefile and creating object
+rgdal::writeOGR(obj=MLN2015_vect, dsn="../data/MAIZE LETHAL NECROSIS_2015.shp",
+                layer="MLN2015", driver="ESRI Shapefile") # this is in geographical projection
+
 #changing the name of columns
 survey2018$x <- survey2018$gpslongitude
 survey2018$y <- survey2018$gpslatitude
-
-survey2018_vect <- SpatialPointsDataFrame(cbind(survey2018$gpslongitude,
-                                                survey2018$gpslatitude),
+survey2018_vect <- SpatialPointsDataFrame(cbind(survey2018$x, survey2018$y),
                                           data=survey2018,
                                           proj4string = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"))
-
 #Export layer to a shapefile
 rgdal::writeOGR(obj=survey2018_vect, dsn="../data/STMA comm survey 2018 v9_MLN_hdg.shp",
          layer="survey2018", driver="ESRI Shapefile") # this is in geographical projection
 ```
 
-```{r, echo=false}
-plot(survey2018_vect, pch = 16, col="green", xlim = c(34,42))
-lines(GADM1_KEN)
-```
-
 ### Seasons
 
-There are 3 seasons where MLN was measured March2017, October 2017 and March 2018. We will have results for each of these seasons. In this code below we specify the name of the columns that we will use. This will make it easier to repeat the analysis for each season
+There are 4 seasons where MLN was measured March 2013, March2017, October 2017 and March 2018. We will have results for each of these seasons. In this code below we specify the name of the columns that we will use. This will make it easier to repeat the analysis for each season
 
-```{r}
-#SEASON COLUMN NAMES: % of farmers affected seasons
-affctd_seasons <- c("affctd_march2017", "affctd_oct2017", "affctd_march2018")
+SEASON COLUMN NAMES: % of farmers affected seasons
 
-#SEASON COLUMN NAMES: % of yield reduction of the farmers affected
-mln_ydrd_seasons <- c("mln_ydrd_march2017", "mln_ydrd_oct2017", "mln_ydrd_march2018")
+SEASON COLUMN NAMES: % of yield reduction of the farmers affected
 
-#SEASON COLUMN NAMES: Total loss
-#If percentage of farmers is almost equal to percentage of land, this is a measure of percentage of yield loss in that community
-#%farmaffected * %yield reduction (%of yield loss from the total yield of the )
-mln_YLoss_seasons  <- c("mln_YLoss_march2017", "mln_YLoss_oct2017", "mln_YLoss_march2018")
-
-```
-
-## IDW
-
-One option is to use IDW using the `gstat` package.
-
-```{r}
-library(gstat)
-
-for (mln_YLoss_season in mln_YLoss_seasons){
-  #building model
-  mg <- gstat(id = "mln_YLoss_march2017", formula = get(mln_YLoss_season)~1, locations = ~x+y, data=survey2018_vect@data, 
-              nmax=7, set=list(idp = .5))
-  
-  #interpolating in the SPAM_KEN extent
-  z <- interpolate(SPAM_KEN, mg)
-  
-  #mask the values using the SPAM_KEN
-  z <- mask(z, SPAM_KEN)
-  
-  #exporting the prediction
-  writeRaster(z, filename = paste0("../output/tif/", mln_YLoss_season,"_IDW.tif"),
-              overwrite=TRUE)
-  
-  plot(z, main = paste0("IDW: ", mln_YLoss_season))
-}
-  
-```
+SEASON COLUMN NAMES: Total loss. If percentage of farmers is almost equal to percentage of land, this is a measure of percentage of yield loss in that community: farmaffected * %yield reduction (%of yield loss from the total yield of the )
 
 
 ## Ordinary krigging
 
 ```{r}
+#For MLN2015
+MLN2015_krig <- MLN2015
+coordinates(MLN2015_krig) <- ~x+y
+crs(MLN2015_krig) <- crs(SPAM_KEN)
+
+#parameters that control the fit of the variogram
+p_psill <- 200  #partial sill, total variance where the empirical variogram appears to level off minus the nugget
+p_model <- "Exp"   #spherical and exponential are most widely used
+p_range <- 200   #The distance after which data are no longer correlated
+p_nugget <- 800    #short range variability in the data #really high in 2013 data
+
+#calculating the sample variogram
+v <- variogram(mln_YLoss_2013~1, data = MLN2015_krig)
+#fitting a model to the sample variogram
+m <- fit.variogram(object = v,  
+                   model = vgm(psill = p_psill, model = p_model, range = p_range, nugget = p_nugget))
+gOK <- gstat(NULL, "mln_YLoss_season",
+             mln_YLoss_2013~1,
+             MLN2015_krig,
+             model=m)
+z <- interpolate(SPAM_KEN, gOK)   #interpolating in the SPAM_KEN extent
+z <- mask(z, SPAM_KEN)   #mask the values using the SPAM_KEN
+writeRaster(z, filename = paste0("../output/tif/mln_YLoss_2013_Krigging.tif"),
+            overwrite=TRUE)
+
+plot(v, m, main='sample vs model variogram')
+plot(z, main = "Krigging: 2013")
+
+
+
+#For survey2018
 survey2018_krig <- survey2018
 coordinates(survey2018_krig) <- ~x+y
 crs(survey2018_krig) <- crs(SPAM_KEN)
 
+mln_YLoss_seasons <- c("mln_YLoss_march2017", "mln_YLoss_oct2017", "mln_YLoss_march2018")
+
+#the nugget here is way lower. Better measurements?
+p_nugget <- 100    #short range variability in the data
+
 for (mln_YLoss_season in mln_YLoss_seasons){
-  #building model
+  #calculating the sample variogram
   v <- variogram(get(mln_YLoss_season)~1, data = survey2018_krig)
-  
+  #fitting a model to the sample variogram
   m <- fit.variogram(object = v,
-                     model = vgm(psill = 1,
-                                 model = "Sph",
-                                 range = 100,
-                                 nugget = 1))
-  
+                     model = vgm(psill = p_psill, model = p_model, range = p_range, nugget = p_nugget))
+  print(plot(v, m, main='sample vs model variogram'))
   gOK <- gstat(NULL, "mln_YLoss_season",
                get(mln_YLoss_season)~1,
                survey2018_krig,
                model=m)
-  
-  #interpolating in the SPAM_KEN extent
-  z <- interpolate(SPAM_KEN, gOK)
-  
-  #mask the values using the SPAM_KEN
-  z <- mask(z, SPAM_KEN)
-  
+  z <- interpolate(SPAM_KEN, gOK)   #interpolating in the SPAM_KEN extent
+  z <- mask(z, SPAM_KEN)    #mask the values using the SPAM_KEN
   #exporting the prediction
   writeRaster(z, filename = paste0("../output/tif/", mln_YLoss_season,"_Krigging.tif"),
               overwrite=TRUE)
-  
-  plot(z, main = paste0("Krigging: ", mln_YLoss_season))
+  plot(z, main = paste0("Krigging: ", mln_YLoss_season), zlim=c(0,50))
 }
 
 ```
