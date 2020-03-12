@@ -168,13 +168,13 @@ mln_total_Loss_2013 <- rast("../output/tif/mln_total_Loss_2013.tif")
 mln_total_Loss_oct2017 <- rast("../output/tif/mln_total_Loss_oct2017.tif")
 mln_total_Loss_march2018 <- rast("../output/tif/mln_total_Loss_march2018.tif")
 
-mln_perc_Loss_2013 <- mln_total_Loss_2013/SPAM2013_prod
-mln_perc_Loss_2018 <- (mln_total_Loss_oct2017 + mln_total_Loss_march2018)/SPAM2018_prod
+mln_perc_Loss_2013 <- 100*mln_total_Loss_2013/SPAM2013_prod
+mln_perc_Loss_2018 <- 100*(mln_total_Loss_oct2017 + mln_total_Loss_march2018)/SPAM2018_prod
 writeRaster(mln_perc_Loss_2013, filename = "../output/tif/mln_perc_Loss_2013.tif", overwrite=TRUE)
 writeRaster(mln_perc_Loss_2018, filename = "../output/tif/mln_perc_Loss_2018.tif", overwrite=TRUE)
 
 #The production loss has the units of MT/pixel. We need to convert the units
-mln_total_Loss_2018 <- (mln_total_Loss_oct2017 + mln_total_Loss_march2018)
+mln_total_Loss_2018 <- mln_total_Loss_oct2017 + mln_total_Loss_march2018
 writeRaster(mln_total_Loss_2018, filename = "../output/tif/mln_total_Loss_2018.tif", overwrite=TRUE)
 
 ```

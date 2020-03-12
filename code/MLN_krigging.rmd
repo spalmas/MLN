@@ -100,26 +100,6 @@ survey2018 %>%
             affctd_oct2017 = mean(mln_affctd_oct2017),
             affctd_march2018 = mean(mln_affctd_march2018))
 ```
-Number of countries by the year of first observation
-```{r, echo=FALSE}
-p <- ggplot(survey2018, aes(x=mln_pkyear)) + 
-  geom_histogram(breaks=seq(2005.5, 2018.5,1)) +
-  scale_x_continuous(breaks=seq(2005,2018,1)) +
-  scale_y_continuous(breaks=seq(2005,2018,1)) +
-  labs(x ="Year of first MLN observation", y = "Number of counties") +
-  theme( panel.grid.minor = element_blank())
-p
-```
-Most common methods against MLN
-```{r, echo=FALSE}
-rbind(as.character(survey2018$mln_contr_meth_1),
-      as.character(survey2018$mln_contr_meth_2),
-      as.character(survey2018$mln_contr_meth_3),
-      as.character(survey2018$mln_contr_meth_4),
-      as.character(survey2018$mln_contr_meth_5)) %>% table() %>% sort(decreasing = TRUE)
-
-```
-
 
 Distribution of affected farmers by county
 ```{r}
@@ -128,11 +108,11 @@ p
 ```
 
 
-# Interpolation
+# Spatial interpolation
 
 ## SPAM layer
 
-We will use the spam production layer as the base for the prediction. It has a resolution of 10 x 10 km and we will predict the MLN loss using that same resolution.
+We will use the spam production layer as the base for the prediction. It has a resolution of 10 x 10 km and we will predict the MLN loss using that same resolution and extent.
 
 First, we crop the SPAM to Kenya border from GADM so only values inside Kenya are calculated.
 ```{r}
@@ -151,7 +131,7 @@ SPAM_KEN <- mask(SPAM_KEN, GADM1_KEN,
 ```
 
 ```{r, echo=FALSE}
-plot(SPAM_KEN)
+plot(SPAM_KEN, main="SPAM 2010 Maize production")
 lines(GADM1_KEN)
 ```
 ## Converting MLN2015 and survey 2018 data to SpatialPointsDataFrame
