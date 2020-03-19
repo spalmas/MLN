@@ -180,10 +180,10 @@ coordinates(MLN2015_krig) <- ~x+y
 crs(MLN2015_krig) <- crs(SPAM_KEN)
 
 #parameters that control the fit of the variogram
-p_psill <- 200  #partial sill, total variance where the empirical variogram appears to level off minus the nugget
-p_model <- "Exp"   #spherical and exponential are most widely used
-p_range <- 200   #The distance after which data are no longer correlated
-p_nugget <- 800    #short range variability in the data #really high in 2013 data
+p_psill <- 1000  #partial sill, total variance where the empirical variogram appears to level off minus the nugget
+p_model <- "Sph"   #spherical and exponential are most widely used
+p_range <- 20   #The distance after which data are no longer correlated
+p_nugget <- 0.1    #short range variability in the data #really high in 2013 data
 
 #calculating the sample variogram
 v <- variogram(mln_YLoss_2013~1, data = MLN2015_krig)
@@ -195,14 +195,18 @@ gOK <- gstat(NULL, "mln_YLoss_season",
              MLN2015_krig,
              model=m)
 z <- interpolate(SPAM_KEN, gOK)   #interpolating in the SPAM_KEN extent
+z[z<0] <- 0   #removing negative values
+MLN2015$predicted <- raster::extract(z, MLN2015_krig)  #getting predicted values for validation
 z <- mask(z, SPAM_KEN)   #mask the values using the SPAM_KEN
 writeRaster(z, filename = paste0("../output/tif/mln_YLoss_2013_Krigging.tif"),
             overwrite=TRUE)
 
+#plotting results
 plot(v, m, main='sample vs model variogram')
-plot(z, main = "Krigging: 2013")
-
-
+plot(z, main = "Krigging: 2013", zlim=c(0,100))
+plot(x = MLN2015$mln_YLoss_2013, y = MLN2015$predicted,
+     main="mln_YLoss Obs vs krigging prediction 2015")
+abline(a=0,b=1)
 
 #For survey2018
 survey2018_krig <- survey2018
@@ -212,7 +216,7 @@ crs(survey2018_krig) <- crs(SPAM_KEN)
 mln_YLoss_seasons <- c("mln_YLoss_march2017", "mln_YLoss_oct2017", "mln_YLoss_march2018")
 
 #the nugget here is way lower. Better measurements?
-p_nugget <- 100    #short range variability in the data
+#p_nugget <- 100    #short range variability in the data
 
 for (mln_YLoss_season in mln_YLoss_seasons){
   #calculating the sample variogram
@@ -226,11 +230,20 @@ for (mln_YLoss_season in mln_YLoss_seasons){
                survey2018_krig,
                model=m)
   z <- interpolate(SPAM_KEN, gOK)   #interpolating in the SPAM_KEN extent
+  z[z<0] <- 0   #removing negative values
+  survey2018$predicted <- raster::extract(z, survey2018_krig)  #getting predicted values for validation
   z <- mask(z, SPAM_KEN)    #mask the values using the SPAM_KEN
   #exporting the prediction
   writeRaster(z, filename = paste0("../output/tif/", mln_YLoss_season,"_Krigging.tif"),
               overwrite=TRUE)
-  plot(z, main = paste0("Krigging: ", mln_YLoss_season), zlim=c(0,50))
+  
+  #plotting results
+  plot(z, main = paste0("Krigging: ", mln_YLoss_season), zlim=c(0,100))
+  plot(v, m, main='sample vs model variogram')
+  plot(x = survey2018[[mln_YLoss_season]],
+       y = survey2018$predicted,
+       main=paste0("mln_YLoss Obs vs krigging prediction:", mln_YLoss_season))
+  abline(a=0,b=1)
 }
 
 ```

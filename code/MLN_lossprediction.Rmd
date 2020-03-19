@@ -180,7 +180,7 @@ writeRaster(mln_total_Loss_2018, filename = "../output/tif/mln_total_Loss_2018.t
 
 ```
 ## Total values to add as labels to the maps
-```{r}
+```{r, echo=FALSE}
 print(paste0("Percentage loss 2013 (%):", mean(values(mln_perc_Loss_2013), na.rm=TRUE)))
 print(paste0("Percentage loss 2018 (%):", mean(values(mln_perc_Loss_2018), na.rm=TRUE)))
 
